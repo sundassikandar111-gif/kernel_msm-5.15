@@ -1,4 +1,4 @@
-name: "Build YASK GKI KPM (In-Tree)"
+name: "Build YASK GKI KPM (ThinLTO)"
 
 env:
   OUT_DIR: "out"
@@ -10,7 +10,7 @@ on:
 
 jobs:
   build-kernels:
-    name: "Build YASK GKI kernel"
+    name: "Build YASK GKI KPM"
     runs-on: ubuntu-24.04
 
     env:
@@ -20,8 +20,8 @@ jobs:
       KERNEL_BRANCH: "android13-5.15-lts"
       DEFCONFIG_NAME: "gki_defconfig"
       LOCAL_VERSION: "-YASK-GKI-KPM"
-      OUTPUT_NAME: "Image.gki.ksu"
       WORK_DIR: ${{ github.workspace }}
+      KP_SUPERKEY: "MySecretKPMKey2026"
 
     steps:
       - name: "Setup workspace"
@@ -71,7 +71,7 @@ jobs:
 
           sed -i '/^POST_DEFCONFIG_CMDS="check_defconfig"/d' ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki || true
 
-      - name: "Configure kernel & patches"
+      - name: "Configure kernel & apply hardware patch"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
@@ -93,129 +93,61 @@ jobs:
           apply_patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-gki-fixup.patch"
           apply_patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-scripts-sign-builds.patch"
 
-      - name: "Add BBG Support"
-        working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
-        run: |
-          echo "Adding BBG..."
-          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
-          echo "CONFIG_BBG=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' security/Kconfig
-
-      - name: "Setup SukiSU-Ultra (Builtin Branch with KPM)"
+      - name: "Setup SukiSU-Ultra & KPM Configs"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
-
-          # Use the 'builtin' branch for in-tree KPM hooks
           curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
 
-          PATCHES=$(curl -s https://api.github.com/repos/topnotchfreaks/kernel_patches/releases/latest | \
-                    grep -o 'browser_download_url.*\.patch' | cut -d\" -f3)
-          SELECTED=$(echo "$PATCHES" | \
-                     grep "0001-Implement-SUSFS" | \
-                     grep "Android-${{ env.ANDROID_VERSION }}" | \
-                     grep "Kernel-${{ env.KERNEL_VERSION }}" | head -n 1)
-          [ -z "$SELECTED" ] && SELECTED=$(echo "$PATCHES" | grep "0001-Implement-SUSFS" | head -n 1)
-          [ -z "$SELECTED" ] && { echo "No SUSFS patch"; exit 1; }
-          curl -L -o susfs.patch "$SELECTED"
-          patch -p1 < susfs.patch || echo "::warning::SUSFS hunks failed"
-          rm -f susfs.patch
-
-          # ============================================================
-          # FIX 1: No leading whitespace! Each echo is a separate command
-          #         so Kconfig entries are valid.
-          # FIX 2: ThinLTO instead of LTO=none
-          # FIX 3: CFI enabled + permissive mode
-          # ============================================================
           CONFIG_FILE="./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
 
-          # --- LTO: ThinLTO (THE FIX — was LTO=none causing bootloops) ---
-          sed -i '/CONFIG_LTO_CLANG/d; /CONFIG_THINLTO/d; /CONFIG_HAS_LTO_CLANG/d; /CONFIG_LTO_NONE/d; /CONFIG_LTO=/d' "$CONFIG_FILE"
+          sed -i '/CONFIG_LTO_CLANG/d; /CONFIG_THINLTO/d; /CONFIG_LTO_NONE/d; /CONFIG_CFI_CLANG/d; /CONFIG_CFI_PERMISSIVE/d' "$CONFIG_FILE"
+
           echo 'CONFIG_LTO_CLANG=y' >> "$CONFIG_FILE"
           echo 'CONFIG_LTO_CLANG_THIN=y' >> "$CONFIG_FILE"
           echo '# CONFIG_LTO_CLANG_FULL is not set' >> "$CONFIG_FILE"
           echo '# CONFIG_LTO_NONE is not set' >> "$CONFIG_FILE"
           echo 'CONFIG_THINLTO=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_HAS_LTO_CLANG=y' >> "$CONFIG_FILE"
 
-          # --- CFI: Keep enabled + permissive (THE FIX — prevents panic from hook mismatches) ---
-          sed -i '/CONFIG_CFI_CLANG/d; /CONFIG_CFI_PERMISSIVE/d' "$CONFIG_FILE"
           echo 'CONFIG_CFI_CLANG=y' >> "$CONFIG_FILE"
           echo 'CONFIG_CFI_PERMISSIVE=y' >> "$CONFIG_FILE"
 
-          # --- KPM & KSU ---
           echo 'CONFIG_KALLSYMS=y' >> "$CONFIG_FILE"
           echo 'CONFIG_KALLSYMS_ALL=y' >> "$CONFIG_FILE"
           echo 'CONFIG_KSU=y' >> "$CONFIG_FILE"
           echo 'CONFIG_KPM=y' >> "$CONFIG_FILE"
 
-          # --- SUSFS ---
-          echo 'CONFIG_KSU_SUSFS=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SUS_PATH=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SUS_MOUNT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SUS_KSTAT=y' >> "$CONFIG_FILE"
-          echo '# CONFIG_KSU_SUSFS_SUS_OVERLAYFS is not set' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_ENABLE_LOG=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SUS_MAP=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_KSU_SUSFS_SUS_SU=y' >> "$CONFIG_FILE"
-
-          # --- Misc ---
           echo 'CONFIG_TMPFS_XATTR=y' >> "$CONFIG_FILE"
           echo 'CONFIG_TMPFS_POSIX_ACL=y' >> "$CONFIG_FILE"
           echo 'CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_TCP_CONG_ADVANCED=y' >> "$CONFIG_FILE"
           echo '# CONFIG_TCP_CONG_BIC is not set' >> "$CONFIG_FILE"
-          echo 'CONFIG_TCP_CONG_WESTWOOD=y' >> "$CONFIG_FILE"
           echo '# CONFIG_TCP_CONG_HTCP is not set' >> "$CONFIG_FILE"
-          echo 'CONFIG_TCP_CONG_BBR=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_DEFAULT_WESTWOOD=y' >> "$CONFIG_FILE"
 
-      # ============================================================
-      # FIX 4: Verify config BEFORE building (catches silent overrides)
-      # ============================================================
-      - name: "Verify critical config entries"
+      - name: "Verify Config"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
-          echo "=== Critical config verification ==="
-          echo "--- LTO ---"
-          grep -n "LTO" "$CONFIG_FILE" || true
-          echo "--- CFI ---"
-          grep -n "CFI" "$CONFIG_FILE" || true
-          echo "--- KPM ---"
-          grep -n "KPM" "$CONFIG_FILE" || true
-          echo "--- KALLSYMS ---"
-          grep -n "KALLSYMS" "$CONFIG_FILE" || true
-
-          # Hard fail if LTO=none sneaked in
-          if grep -q "CONFIG_LTO_NONE=y" "$CONFIG_FILE"; then
-            echo "::error::CONFIG_LTO_NONE=y found! This WILL bootloop. Aborting."
+          echo "=== Critical config entries ==="
+          grep -E "LTO|CFI|KPM|KALLSYMS" "$CONFIG_FILE" | sort -u
+          echo "==============================="
+          if ! grep -q "CONFIG_KPM=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_KPM=y missing!"
             exit 1
           fi
-          # Hard fail if ThinLTO is missing
           if ! grep -q "CONFIG_LTO_CLANG_THIN=y" "$CONFIG_FILE"; then
-            echo "::error::CONFIG_LTO_CLANG_THIN=y not found! Aborting."
+            echo "::error::CONFIG_LTO_CLANG_THIN=y missing!"
             exit 1
           fi
-          # Hard fail if CFI is disabled
-          if grep -q "# CONFIG_CFI_CLANG is not set" "$CONFIG_FILE"; then
-            echo "::error::CFI is disabled! This WILL bootloop with ThinLTO. Aborting."
+          if ! grep -q "CONFIG_CFI_CLANG=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_CFI_CLANG=y missing!"
             exit 1
           fi
-          echo "=== All checks passed ==="
+          if grep -q "CONFIG_LTO_NONE=y" "$CONFIG_FILE"; then
+            echo "::error::CONFIG_LTO_NONE=y found — this WILL bootloop!"
+            exit 1
+          fi
+          echo "✅ All config checks passed."
 
-      # ============================================================
-      # FIX 5: Build with LTO=thin (was LTO=none — THE bootloop cause)
-      # ============================================================
       - name: "Build kernel"
         working-directory: ${{ env.WORK_DIR }}
         run: |
@@ -223,75 +155,41 @@ jobs:
           BUILD_CONFIG=${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
 
-      # ============================================================
-      # FIX 6: Verify the built config is correct (post-build check)
-      # ============================================================
-      - name: "Verify built kernel config"
+      - name: "Patch kernel with KPM host"
         working-directory: ${{ env.WORK_DIR }}
         run: |
-          echo "=== Post-build config from out/dist ==="
-          if [ -f out/dist/config ]; then
-            grep -E "LTO|CFI|KPM|KALLSYMS_ALL" out/dist/config
-          fi
-          # Also check the .config used during build
-          BUILT_CONFIG=$(find out/ -name ".config" -path "*/common*" | head -1)
-          if [ -n "$BUILT_CONFIG" ]; then
-            echo "=== .config used during build: $BUILT_CONFIG ==="
-            grep -E "LTO|CFI|KPM|KALLSYMS_ALL" "$BUILT_CONFIG"
-          fi
-          echo "=== Verifying Image exists ==="
-          ls -lh out/dist/Image
-
-      # ============================================================
-      # FIX 7: Inject KPM host via patch_linux / kptools
-      #         (THIS STEP WAS COMPLETELY MISSING)
-      # ============================================================
-      - name: "Patch kernel with KPM host (kptools)"
-        working-directory: ${{ env.WORK_DIR }}
-        run: |
-          echo "=== Downloading latest kptools ==="
-          # Get the latest release of KernelPatch
-          KP_LATEST=$(curl -s https://api.github.com/repos/bmax121/KernelPatch/releases/latest \
-                      | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
-          echo "Latest KernelPatch version: $KP_LATEST"
-
-          # Download kptools binary and kpimg
-          curl -L -o kptools "https://github.com/bmax121/KernelPatch/releases/download/${KP_LATEST}/kptools-linux"
-          curl -L -o kpimg "https://github.com/bmax121/KernelPatch/releases/download/${KP_LATEST}/kpimg-android"
+          wget -q https://github.com/bmax121/KernelPatch/releases/latest/download/kptools-linux -O kptools
+          wget -q https://github.com/bmax121/KernelPatch/releases/latest/download/kpimg-android -O kpimg
           chmod +x kptools
 
-          echo "=== Patching Image with KPM host ==="
-          ./kptools -p \
-            --image out/dist/Image \
-            --out out/dist/Image_patched \
-            --kpimg kpimg \
-            --skey "my_superkey" \
-            2>&1 | tee kptools_output.log
-
-          # Check for critical errors
-          if grep -qi "can't find arm64 relocation" kptools_output.log; then
-            echo "::error::kptools failed to find relocation table. See log above."
-            echo "::error::Trying SukiSU-Ultra fork of patch_linux as fallback..."
-
-            # Fallback: try the SukiSU-Ultra fork
-            git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch.git
-            cd SukiSU_KernelPatch_patch
-            # Build or use their patching tool
-            if [ -f patch_linux ]; then
-              chmod +x patch_linux
-              ./patch_linux ../out/dist/Image ../out/dist/Image_patched
-            elif [ -f patch.sh ]; then
-              bash patch.sh ../out/dist/Image ../out/dist/Image_patched
-            fi
-            cd ..
+          IMAGE_FILE="out/dist/Image"
+          if [ ! -f "$IMAGE_FILE" ]; then
+            echo "::error::Image not found at $IMAGE_FILE"
+            ls -la out/dist/ || true
+            exit 1
           fi
 
+          KVER=$(find out/ -name "kernel.release" -type f -exec cat {} \; 2>/dev/null | head -1)
+          if [ -z "$KVER" ]; then
+            KVER="5.15.196"
+            echo "::warning::kernel.release not found, using fallback: $KVER"
+          fi
+          echo "Kernel version: $KVER"
+
+          ./kptools -p \
+            -i "$IMAGE_FILE" \
+            -o out/dist/Image_patched \
+            -K kpimg \
+            -k "$KVER" \
+            -s "${{ env.KP_SUPERKEY }}" \
+            2>&1 | tee kptools_output.log
+
           if [ -f out/dist/Image_patched ]; then
-            echo "=== KPM host injection successful ==="
-            mv out/dist/Image_patched out/dist/Image
-            ls -lh out/dist/Image
+            mv out/dist/Image_patched "$IMAGE_FILE"
+            echo "✅ KPM host injected successfully."
           else
-            echo "::error::Patched Image not found. KPM injection failed."
+            echo "::error::kptools failed. Output:"
+            cat kptools_output.log
             exit 1
           fi
 
@@ -302,14 +200,12 @@ jobs:
           path: ${{ env.WORK_DIR }}/out/dist/Image
           retention-days: 1
 
-      # Also upload the build log for debugging
-      - name: "Upload build logs"
+      - name: "Upload kptools log"
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
-          path: |
-            ${{ env.WORK_DIR }}/kptools_output.log
+          name: kptools-log
+          path: ${{ env.WORK_DIR }}/kptools_output.log
           retention-days: 3
 
   package-kernels:
@@ -324,20 +220,17 @@ jobs:
 
       - name: "Create release package"
         run: |
-          set -e
           git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b YASK AnyKernel3
           cp ./artifacts/GKI-Kernel/Image AnyKernel3/
 
-          ZIP_NAME="Anykernel3_YASK-GKI-KPM_$(date +'%Y-%m-%d').zip"
+          ZIP_NAME="Anykernel3_YASK-KPM-ThinLTO.zip"
           cd AnyKernel3
           zip -r9 "../$ZIP_NAME" * -x .git/*
           cd ..
 
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-
       - name: "Upload final package"
         uses: actions/upload-artifact@v4
         with:
-          name: YASK-GKI-KPM
-          path: ${{ env.ZIP_NAME }}
+          name: YASK-KPM-Final
+          path: Anykernel3_YASK-KPM-ThinLTO.zip
           retention-days: 7
