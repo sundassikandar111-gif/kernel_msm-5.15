@@ -1,4 +1,4 @@
-name: "Build YASK GKI KPM (Fixed)"
+name: "Build YASK GKI KPM (In-Tree)"
 
 env:
   OUT_DIR: "out"
@@ -22,7 +22,6 @@ jobs:
       LOCAL_VERSION: "-YASK-GKI-KPM"
       OUTPUT_NAME: "Image.gki.ksu"
       WORK_DIR: ${{ github.workspace }}
-      KPM_PATCH_URL: "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/latest/download/patch_linux"
 
     steps:
       - name: "Setup workspace"
@@ -61,7 +60,6 @@ jobs:
            -e 's/^CLANG_VERSION=.*/CLANG_VERSION=r547379/' \
            ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.constants
           
-          # Disable strict KMI checks to allow extra symbols (CFI) when LTO is off
           sed -i \
            -e '/^KMI_SYMBOL_LIST_STRICT_MODE=/d' \
            -e '/^TRIM_NONLISTED_KMI=/d' \
@@ -73,7 +71,7 @@ jobs:
           
           sed -i '/^POST_DEFCONFIG_CMDS="check_defconfig"/d' ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki || true
 
-      - name: "Configure kernel & patches (CRITICAL STEP)"
+      - name: "Configure kernel & patches"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
@@ -103,11 +101,13 @@ jobs:
           echo "CONFIG_BBG=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' security/Kconfig
 
-      - name: "Setup SukiSU-Ultra with KPM Configs"
+      - name: "Setup SukiSU-Ultra (Builtin Branch with KPM)"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
-          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin
+          
+          # Use the 'builtin' branch for in-tree KPM hooks
+          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
           
           PATCHES=$(curl -s https://api.github.com/repos/topnotchfreaks/kernel_patches/releases/latest | \
                     grep -o 'browser_download_url.*\.patch' | cut -d\" -f3)
@@ -167,25 +167,11 @@ jobs:
           BUILD_CONFIG=${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
 
-      - name: "Apply KPM patch (Inject Host)"
-        working-directory: ${{ env.WORK_DIR }}/out/dist
-        run: |
-          curl -LSs "${{ env.KPM_PATCH_URL }}" -o patch
-          chmod +x patch
-          ./patch
-          
-          if [ ! -f "oImage" ]; then
-            echo "::error::KPM host injection FAILED. oImage was not created."
-            exit 1
-          fi
-          mv oImage "${{ env.OUTPUT_NAME }}"
-          echo "✅ KPM host injected successfully."
-
       - name: "Upload kernel artifact"
         uses: actions/upload-artifact@v4
         with:
           name: GKI-Kernel
-          path: ${{ env.WORK_DIR }}/out/dist/${{ env.OUTPUT_NAME }}
+          path: ${{ env.WORK_DIR }}/out/dist/Image
           retention-days: 1
 
   package-kernels:
@@ -202,7 +188,7 @@ jobs:
         run: |
           set -e
           git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b YASK AnyKernel3
-          find ./artifacts -name "Image.*" -exec cp {} AnyKernel3/ \;
+          cp ./artifacts/Image AnyKernel3/
           
           ZIP_NAME="Anykernel3_YASK-GKI-KPM_$(date +'%Y-%m-%d').zip"
           cd AnyKernel3
