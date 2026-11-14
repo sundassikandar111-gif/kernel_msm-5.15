@@ -93,11 +93,26 @@ jobs:
           apply_patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-gki-fixup.patch"
           apply_patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-scripts-sign-builds.patch"
 
-      - name: "Setup SukiSU-Ultra & KPM Configs"
+      - name: "Setup SukiSU-Ultra & SUSFS & KPM Configs"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
           curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
+
+          # Integrate SUSFS so linux/susfs.h is present
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15 susfs_repo || true
+          if [ -d "susfs_repo" ]; then
+            mkdir -p include/linux fs
+            cp -r susfs_repo/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || true
+            cp -r susfs_repo/kernel_patches/fs/* fs/ 2>/dev/null || true
+            patch -p1 < susfs_repo/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch || true
+            rm -rf susfs_repo
+          fi
+
+          if [ ! -f "include/linux/susfs.h" ]; then
+            mkdir -p include/linux
+            curl -sSL "https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android13-5.15/kernel_patches/include/linux/susfs.h" -o include/linux/susfs.h || true
+          fi
 
           CONFIG_FILE="./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
 
@@ -117,6 +132,25 @@ jobs:
           echo 'CONFIG_KSU=y' >> "$CONFIG_FILE"
           echo 'CONFIG_KPM=y' >> "$CONFIG_FILE"
 
+          # SUSFS Configs
+          echo 'CONFIG_KSU_SUSFS=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SUS_PATH=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SUS_MOUNT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SUS_KSTAT=y' >> "$CONFIG_FILE"
+          echo '# CONFIG_KSU_SUSFS_SUS_OVERLAYFS is not set' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_ENABLE_LOG=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SUS_MAP=y' >> "$CONFIG_FILE"
+          echo 'CONFIG_KSU_SUSFS_SUS_SU=y' >> "$CONFIG_FILE"
+
           echo 'CONFIG_TMPFS_XATTR=y' >> "$CONFIG_FILE"
           echo 'CONFIG_TMPFS_POSIX_ACL=y' >> "$CONFIG_FILE"
           echo 'CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y' >> "$CONFIG_FILE"
@@ -128,7 +162,7 @@ jobs:
         run: |
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
           echo "=== Critical config entries ==="
-          grep -E "LTO|CFI|KPM|KALLSYMS" "$CONFIG_FILE" | sort -u
+          grep -E "LTO|CFI|KPM|KALLSYMS|SUSFS" "$CONFIG_FILE" | sort -u
           echo "==============================="
           if ! grep -q "CONFIG_KPM=y" "$CONFIG_FILE"; then
             echo "::error::CONFIG_KPM=y missing!"
