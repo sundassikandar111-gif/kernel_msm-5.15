@@ -132,12 +132,13 @@ jobs:
           echo 'CONFIG_CFI_CLANG=y' >> "$CONFIG_FILE"
           echo '# CONFIG_CFI_PERMISSIVE is not set' >> "$CONFIG_FILE"
 
-          # Ensure CFI fail handler is exported for vendor modules (smem.ko, qcom_hwspinlock.ko)
-          if [ -f "kernel/cfi.c" ]; then
-            if ! grep -q "EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort)" kernel/cfi.c; then
-              echo 'EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort);' >> kernel/cfi.c
-            fi
-          fi
+          # Cleanly export __ubsan_handle_cfi_check_fail_abort for vendor modules (smem.ko) via a dedicated object
+          cat << 'EOF' > kernel/cfi_export.c
+#include <linux/export.h>
+extern void __ubsan_handle_cfi_check_fail_abort(void *data, unsigned long fn, unsigned long vt);
+EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort);
+EOF
+          echo "obj-y += cfi_export.o" >> kernel/Makefile
 
           echo 'CONFIG_KALLSYMS=y' >> "$CONFIG_FILE"
           echo 'CONFIG_KALLSYMS_ALL=y' >> "$CONFIG_FILE"
