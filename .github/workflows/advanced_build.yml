@@ -335,16 +335,16 @@ jobs:
           echo "CONFIG_BBG=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
           
-      - name: "🔧 Setup ReSukiSU"
+      - name: "🔧 Setup SukiSU-Ultra"
         if: matrix.variant == 'ksu'
         working-directory: ./${{ env.kernelDir }}/${{ env.kernelName }}
         run: |
           rm -rf ./KernelSU ./drivers/kernelsu
 
-          echo "📦 Installing KSU..."
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
+          echo "📦 Installing SukiSU-Ultra..."
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
           
-          echo "✔ KSU installed successfully"
+          echo "✔ SukiSU-Ultra installed successfully"
           
           echo "📦 Cloning SUSFS4KSU for kernel patches..."
           git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15
@@ -419,7 +419,7 @@ jobs:
             fi
           fi
           
-          echo "🎉 ReSukiSU installed and SUSFS for GKI android13-5.15 fully integrated!"
+          echo "🎉 SukiSU-Ultra installed and SUSFS for GKI android13-5.15 fully integrated!"
 
       - name: "🔨 Build kernel"
         if: github.event.inputs.buildToolchains == 'android-tools'
