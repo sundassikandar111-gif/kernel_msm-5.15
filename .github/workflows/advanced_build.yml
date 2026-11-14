@@ -1,4 +1,4 @@
-name: "Build YASK (GKI KPM)"
+name: "Build YASK GKI KPM"
 
 env:
   OUT_DIR: "out"
@@ -89,11 +89,11 @@ jobs:
           echo "CONFIG_BBG=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' security/Kconfig
 
-      - name: "Setup KernelSU & SUSFS & Configs"
+      - name: "Setup SukiSU-Ultra with KPM"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
-          # Added --kpm flag to enable KPM support
+          # Install SukiSU with --kpm flag
           curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin --kpm
           
           PATCHES=$(curl -s https://api.github.com/repos/topnotchfreaks/kernel_patches/releases/latest | \
@@ -155,7 +155,6 @@ jobs:
       - name: "Fix Module List"
         working-directory: ${{ env.WORK_DIR }}
         run: |
-          # FIX: Copy the generated modules order to prevent the "modules list out of date" error
           if [ -f "out/common_gki/common/modules.order" ]; then
             cp out/common_gki/common/modules.order common_gki/common/android/gki_aarch64_modules
           fi
