@@ -1,4 +1,4 @@
-name: "Build YASK (CLO KPM)"
+name: "Build YASK (GKI KPM)"
 
 env:
   OUT_DIR: "out"
@@ -10,20 +10,19 @@ on:
 
 jobs:
   build-kernels:
-    name: "Build YASK CLO kernel"
+    name: "Build YASK GKI kernel"
     runs-on: ubuntu-latest
 
     env:
-      KERNEL_LOC_DIR: "common_clo"
-      KERNEL_NAME: "clo"
-      # THIS IS THE SOURCE THAT BOOTS YOUR PHONE
-      KERNEL_REPO: "https://git.codelinaro.org/clo/la/kernel/msm-5.15.git"
-      KERNEL_BRANCH: "kernel.lnx.5.15.r16-rel"
+      KERNEL_LOC_DIR: "common_gki"
+      KERNEL_NAME: "common"
+      KERNEL_REPO: "https://android.googlesource.com/kernel/common"
+      KERNEL_BRANCH: "android13-5.15-lts"
       DEFCONFIG_NAME: "gki_defconfig"
-      LOCAL_VERSION: "-YASK-CLO-KPM"
-      OUTPUT_NAME: "Image.clo.ksu"
+      LOCAL_VERSION: "-YASK-GKI-KPM"
+      OUTPUT_NAME: "Image.gki.ksu"
       WORK_DIR: ${{ github.workspace }}
-      KPM_PATCH_URL: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+      KPM_PATCH_URL: "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
 
     steps:
       - name: "Setup workspace"
@@ -94,7 +93,8 @@ jobs:
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
-          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin
+          # Added --kpm flag to enable KPM support
+          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin --kpm
           
           PATCHES=$(curl -s https://api.github.com/repos/topnotchfreaks/kernel_patches/releases/latest | \
                     grep -o 'browser_download_url.*\.patch' | cut -d\" -f3)
@@ -144,15 +144,21 @@ jobs:
           # CONFIG_LTO_CLANG_FULL is not set
           # CONFIG_THINLTO is not set
           EOF
-          echo "KSU & KPM configs added"
 
       - name: "Build kernel"
         working-directory: ${{ env.WORK_DIR }}
         run: |
-          # THE ONLY CHANGE: LTO=none INSTEAD OF thin
           LTO=none \
           BUILD_CONFIG=${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
+
+      - name: "Fix Module List"
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          # FIX: Copy the generated modules order to prevent the "modules list out of date" error
+          if [ -f "out/common_gki/common/modules.order" ]; then
+            cp out/common_gki/common/modules.order common_gki/common/android/gki_aarch64_modules
+          fi
 
       - name: "Apply KPM patch"
         working-directory: ${{ env.WORK_DIR }}/out/dist
@@ -165,7 +171,7 @@ jobs:
       - name: "Upload kernel artifact"
         uses: actions/upload-artifact@v4
         with:
-          name: CLO-Kernel
+          name: GKI-Kernel
           path: ${{ env.WORK_DIR }}/out/dist/${{ env.OUTPUT_NAME }}
           retention-days: 1
 
@@ -185,7 +191,7 @@ jobs:
           git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b YASK AnyKernel3
           find ./artifacts -name "Image.*" -exec cp {} AnyKernel3/ \;
           
-          ZIP_NAME="Anykernel3_YASK-CLO-KPM_$(date +'%Y-%m-%d').zip"
+          ZIP_NAME="Anykernel3_YASK-GKI-KPM_$(date +'%Y-%m-%d').zip"
           cd AnyKernel3
           zip -r9 "../$ZIP_NAME" * -x .git/*
           cd ..
@@ -195,6 +201,6 @@ jobs:
       - name: "Upload final package"
         uses: actions/upload-artifact@v4
         with:
-          name: YASK-CLO-KPM
+          name: YASK-GKI-KPM
           path: ${{ env.ZIP_NAME }}
           retention-days: 7
