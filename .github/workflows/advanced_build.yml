@@ -207,18 +207,12 @@ jobs:
             exit 1
           fi
 
-          KVER=$(find out/ -name "kernel.release" -type f -exec cat {} \; 2>/dev/null | head -1)
-          if [ -z "$KVER" ]; then
-            KVER="5.15.196"
-            echo "::warning::kernel.release not found, using fallback: $KVER"
-          fi
-          echo "Kernel version: $KVER"
-
+          echo "=== Running kptools patch ==="
+          # In kptools CLI: -k specifies the kpimg binary!
           ./kptools -p \
             -i "$IMAGE_FILE" \
             -o out/dist/Image_patched \
-            -K kpimg \
-            -k "$KVER" \
+            -k kpimg \
             -s "${{ env.KP_SUPERKEY }}" \
             2>&1 | tee kptools_output.log
 
