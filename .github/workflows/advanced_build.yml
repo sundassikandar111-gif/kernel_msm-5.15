@@ -1,4 +1,4 @@
-name: "Build YASK GKI KPM"
+name: "Build YASK GKI KPM (Fixed)"
 
 env:
   OUT_DIR: "out"
@@ -11,7 +11,7 @@ on:
 jobs:
   build-kernels:
     name: "Build YASK GKI kernel"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       KERNEL_LOC_DIR: "common_gki"
@@ -22,7 +22,7 @@ jobs:
       LOCAL_VERSION: "-YASK-GKI-KPM"
       OUTPUT_NAME: "Image.gki.ksu"
       WORK_DIR: ${{ github.workspace }}
-      KPM_PATCH_URL: "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+      KPM_PATCH_URL: "https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/latest/download/patch_linux"
 
     steps:
       - name: "Setup workspace"
@@ -30,7 +30,7 @@ jobs:
           mkdir -p ${{ env.KERNEL_LOC_DIR }}
           echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
           sudo apt-get update -qq
-          sudo apt-get install -y repo rsync aria2
+          sudo apt-get install -y repo rsync aria2 bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev libxml2-dev libxml2-utils lzop pngcrush schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python-is-python3
 
       - name: "Clone kernel source"
         working-directory: ./${{ env.KERNEL_LOC_DIR }}
@@ -63,7 +63,7 @@ jobs:
           
           sed -i '/^POST_DEFCONFIG_CMDS="check_defconfig"/d' ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki || true
 
-      - name: "Configure kernel & patches"
+      - name: "Configure kernel & patches (CRITICAL STEP)"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
@@ -74,7 +74,11 @@ jobs:
             local url="$1"
             local file=$(basename "$url")
             curl -L -o "$file" "$url"
-            patch -p1 < "$file" || echo "::warning::Hunks failed in $file"
+            if ! patch -p1 < "$file"; then
+              echo "::error::CRITICAL PATCH FAILED: $file. The kernel would not boot."
+              rm -f "$file"
+              exit 1
+            fi
             rm -f "$file"
           }
           
@@ -89,12 +93,11 @@ jobs:
           echo "CONFIG_BBG=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' security/Kconfig
 
-      - name: "Setup SukiSU-Ultra with KPM"
+      - name: "Setup SukiSU-Ultra with KPM Configs"
         working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
           rm -rf KernelSU drivers/kernelsu
-          # Install SukiSU with --kpm flag
-          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin --kpm
+          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin
           
           PATCHES=$(curl -s https://api.github.com/repos/topnotchfreaks/kernel_patches/releases/latest | \
                     grep -o 'browser_download_url.*\.patch' | cut -d\" -f3)
@@ -136,7 +139,9 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
           CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BIC=n
           CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_HTCP=n
           CONFIG_TCP_CONG_BBR=y
           CONFIG_DEFAULT_WESTWOOD=y
           # CONFIG_LTO_CLANG is not set
@@ -152,20 +157,19 @@ jobs:
           BUILD_CONFIG=${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki.aarch64 \
           build/build.sh -j$(nproc --all)
 
-      - name: "Fix Module List"
-        working-directory: ${{ env.WORK_DIR }}
-        run: |
-          if [ -f "out/common_gki/common/modules.order" ]; then
-            cp out/common_gki/common/modules.order common_gki/common/android/gki_aarch64_modules
-          fi
-
-      - name: "Apply KPM patch"
+      - name: "Apply KPM patch (Inject Host)"
         working-directory: ${{ env.WORK_DIR }}/out/dist
         run: |
           curl -LSs "${{ env.KPM_PATCH_URL }}" -o patch
           chmod +x patch
           ./patch
+          
+          if [ ! -f "oImage" ]; then
+            echo "::error::KPM host injection FAILED. oImage was not created."
+            exit 1
+          fi
           mv oImage "${{ env.OUTPUT_NAME }}"
+          echo "✅ KPM host injected successfully."
 
       - name: "Upload kernel artifact"
         uses: actions/upload-artifact@v4
@@ -176,7 +180,7 @@ jobs:
 
   package-kernels:
     name: "Package Kernels"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-kernels]
     steps:
       - name: "Download kernel artifacts"
