@@ -1,111 +1,200 @@
-name: "Build Kernel (KPM Enabled)"
+name: "Build YASK (CLO KPM)"
+
+env:
+  OUT_DIR: "out"
+  KERNEL_VERSION: "5.15"
+  ANDROID_VERSION: "13"
 
 on:
   workflow_dispatch:
-    inputs:
-      kernel_source:
-        description: "Kernel Source"
-        required: true
-        default: "https://github.com/topnotchfreaks/kernel_msm-5.15"
-      kernel_branch:
-        description: "Branch"
-        required: true
-        default: "codelinaro"
-      device:
-        description: "Device (Defconfig)"
-        required: true
-        default: "gki"
-      ksu_variant:
-        description: "Root Manager"
-        required: true
-        type: choice
-        default: "SukiSU"
-        options:
-          - "SukiSU"
-          - "ReSukiSU"
-          - "None"
 
 jobs:
-  build:
+  build-kernels:
+    name: "Build YASK CLO kernel"
     runs-on: ubuntu-latest
+
+    env:
+      KERNEL_LOC_DIR: "common_clo"
+      KERNEL_NAME: "clo"
+      # THIS IS THE SOURCE THAT BOOTS YOUR PHONE
+      KERNEL_REPO: "https://git.codelinaro.org/clo/la/kernel/msm-5.15.git"
+      KERNEL_BRANCH: "kernel.lnx.5.15.r16-rel"
+      DEFCONFIG_NAME: "gki_defconfig"
+      LOCAL_VERSION: "-YASK-CLO-KPM"
+      OUTPUT_NAME: "Image.clo.ksu"
+      WORK_DIR: ${{ github.workspace }}
+      KPM_PATCH_URL: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Maximize build space
-        uses: AdityaGarg8/remove-unwanted-software@v4
-        with:
-          remove-android: 'true'
-          remove-dotnet: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
-          remove-docker-images: 'true'
-
-      - name: Set up Dependencies
+      - name: "Setup workspace"
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python-is-python3
+          mkdir -p ${{ env.KERNEL_LOC_DIR }}
+          echo "BUILD_TIME=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+          sudo apt-get update -qq
+          sudo apt-get install -y repo rsync aria2
 
-      - name: Get Clang
+      - name: "Clone kernel source"
+        working-directory: ./${{ env.KERNEL_LOC_DIR }}
         run: |
-          mkdir -p ${{ github.workspace }}/clang
-          cd ${{ github.workspace }}/clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main-kernel/clang-r487747c.tar.gz
-          tar -xzf clang-r487747c.tar.gz
-          echo "${{ github.workspace }}/clang/bin" >> $GITHUB_PATH
+          git clone --recursive --branch ${{ env.KERNEL_BRANCH }} \
+            ${{ env.KERNEL_REPO }} ${{ env.KERNEL_NAME }} --depth=1
 
-      - name: Clone Kernel
+      - name: "Initialize AOSP repo and toolchains"
+        working-directory: ${{ env.WORK_DIR }}
         run: |
-          git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} ${{ github.event.inputs.kernel_source }} kernel
-
-      - name: Apply KPM & LTO Fixes
-        run: |
-          cd kernel
-          # 1. Force LTO off
-          sed -i '/CONFIG_LTO_CLANG/d' arch/arm64/configs/${{ github.event.inputs.device }}_defconfig || true
-          sed -i '/CONFIG_LTO_CLANG/d' arch/arm64/configs/gki_defconfig || true
-          echo "# CONFIG_LTO_CLANG is not set" >> arch/arm64/configs/gki_defconfig
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15-lts --depth=1
+          repo sync --optimized-fetch --prune -j8
           
-          # 2. Add KPM
-          echo "CONFIG_KPM=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KALLSYMS_ALL=y" >> arch/arm64/configs/gki_defconfig
+          rm -rf .repo
+          rm -rf common
           
-          # 3. Install SukiSU with KPM
-          if [ "${{ github.event.inputs.ksu_variant }}" = "SukiSU" ]; then
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main --kpm
-          fi
+          aria2c -x 16 -s 16 -o prebuilts/clang/host/linux-x86/clang-r547379.tar.gz "https://github.com/topnotchfreaks/clang/releases/download/v1.0.0/clang-r547379.tar.gz"
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r547379
+          tar -xzf prebuilts/clang/host/linux-x86/clang-r547379.tar.gz -C prebuilts/clang/host/linux-x86/clang-r547379
+          rm -rf prebuilts/clang/host/linux-x86/clang-r547379.tar.gz
+          
+          rm -rf prebuilts/clang/host/linux-x86/clang-3289846
+          rm -rf prebuilts/clang/host/linux-x86/clang-r450784e
+          rm -rf prebuilts/clang/host/linux-x86/clang-stable
+          
+          sed -i \
+           -e 's/^BRANCH=.*/BRANCH=android13-5.15/' \
+           -e 's/^CLANG_VERSION=.*/CLANG_VERSION=r547379/' \
+           ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.constants
+          
+          sed -i '/^POST_DEFCONFIG_CMDS="check_defconfig"/d' ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki || true
 
-      - name: Build Kernel
+      - name: "Configure kernel & patches"
+        working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
-          cd kernel
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC=clang
-          export LLVM=1
-          make O=out gki_defconfig
-          make O=out -j$(nproc) LTO=none
+          CONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          echo "CONFIG_LOCALVERSION=\"${{ env.LOCAL_VERSION }}-${{ env.BUILD_TIME }}\"" >> "$CONFIG_FILE"
+          echo "CONFIG_LOCALVERSION_AUTO=n" >> "$CONFIG_FILE"
+          
+          apply_patch() {
+            local url="$1"
+            local file=$(basename "$url")
+            curl -L -o "$file" "$url"
+            patch -p1 < "$file" || echo "::warning::Hunks failed in $file"
+            rm -f "$file"
+          }
+          
+          apply_patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-gki-fixup.patch"
+          apply_patch "https://raw.githubusercontent.com/topnotchfreaks/kernel_patches/main/0001-scripts-sign-builds.patch"
 
-      - name: Inject KPM Host
+      - name: "Add BBG Support"
+        working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
-          cd kernel
-          # Download KernelPatch patcher
-          wget -q https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/latest/download/patch_linux
-          chmod +x patch_linux
-          ./patch_linux out/arch/arm64/boot/Image
-          if [ -f "oImage" ]; then
-            mv oImage out/arch/arm64/boot/Image
-            echo "KPM Host Injected"
-          fi
+          echo "Adding BBG..."
+          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+          echo "CONFIG_BBG=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/landlock/landlock,baseband_guard/ } }' security/Kconfig
 
-      - name: Package AnyKernel3
+      - name: "Setup KernelSU & SUSFS & Configs"
+        working-directory: ${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}
         run: |
-          git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b master AnyKernel3
-          cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
-          cd AnyKernel3
-          zip -r9 ../Kernel.zip *
+          rm -rf KernelSU drivers/kernelsu
+          curl -LSs https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh | bash -s tmp-builtin
+          
+          PATCHES=$(curl -s https://api.github.com/repos/topnotchfreaks/kernel_patches/releases/latest | \
+                    grep -o 'browser_download_url.*\.patch' | cut -d\" -f3)
+          SELECTED=$(echo "$PATCHES" | \
+                     grep "0001-Implement-SUSFS" | \
+                     grep "Android-${{ env.ANDROID_VERSION }}" | \
+                     grep "Kernel-${{ env.KERNEL_VERSION }}" | head -n 1)
+          [ -z "$SELECTED" ] && SELECTED=$(echo "$PATCHES" | grep "0001-Implement-SUSFS" | head -n 1)
+          [ -z "$SELECTED" ] && { echo "No SUSFS patch"; exit 1; }
+          curl -L -o susfs.patch "$SELECTED"
+          patch -p1 < susfs.patch || echo "::warning::SUSFS hunks failed"
+          rm -f susfs.patch
+          
+          CONFIG_FILE="./arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          
+          cat >> "$CONFIG_FILE" << 'EOF'
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
+          CONFIG_KSU=y
+          CONFIG_KPM=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SUS_SU=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_DEFAULT_WESTWOOD=y
+          # CONFIG_LTO_CLANG is not set
+          # CONFIG_LTO_CLANG_THIN is not set
+          # CONFIG_LTO_CLANG_FULL is not set
+          # CONFIG_THINLTO is not set
+          EOF
+          echo "KSU & KPM configs added"
 
-      - name: Upload Artifact
+      - name: "Build kernel"
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          # THE ONLY CHANGE: LTO=none INSTEAD OF thin
+          LTO=none \
+          BUILD_CONFIG=${{ env.KERNEL_LOC_DIR }}/${{ env.KERNEL_NAME }}/build.config.gki.aarch64 \
+          build/build.sh -j$(nproc --all)
+
+      - name: "Apply KPM patch"
+        working-directory: ${{ env.WORK_DIR }}/out/dist
+        run: |
+          curl -LSs "${{ env.KPM_PATCH_URL }}" -o patch
+          chmod +x patch
+          ./patch
+          mv oImage "${{ env.OUTPUT_NAME }}"
+
+      - name: "Upload kernel artifact"
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-KPM
-          path: Kernel.zip
+          name: CLO-Kernel
+          path: ${{ env.WORK_DIR }}/out/dist/${{ env.OUTPUT_NAME }}
+          retention-days: 1
+
+  package-kernels:
+    name: "Package Kernels"
+    runs-on: ubuntu-latest
+    needs: [build-kernels]
+    steps:
+      - name: "Download kernel artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts/
+
+      - name: "Create release package"
+        run: |
+          set -e
+          git clone --depth=1 https://github.com/topnotchfreaks/AnyKernel3 -b YASK AnyKernel3
+          find ./artifacts -name "Image.*" -exec cp {} AnyKernel3/ \;
+          
+          ZIP_NAME="Anykernel3_YASK-CLO-KPM_$(date +'%Y-%m-%d').zip"
+          cd AnyKernel3
+          zip -r9 "../$ZIP_NAME" * -x .git/*
+          cd ..
+          
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          
+      - name: "Upload final package"
+        uses: actions/upload-artifact@v4
+        with:
+          name: YASK-CLO-KPM
+          path: ${{ env.ZIP_NAME }}
+          retention-days: 7
