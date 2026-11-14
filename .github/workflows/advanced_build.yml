@@ -80,7 +80,7 @@ jobs:
     env:
       kernelDir: common_${{ github.event.inputs.kernelDevice }}
       kernelName: common
-      DEFCONFIG_NAME: ${{ github.event.inputs.kernelDevice }}_defconfig
+      DEFCONFIG_NAME: gki_defconfig
       WORK_DIR: ${{ github.workspace }}
 
     steps:
@@ -446,11 +446,48 @@ jobs:
             LLVM=1 \
             CC=clang \
             AR=llvm-ar \
-            NM=llvm-nm \
+            NM=llvm-nn \
             OBJCOPY=llvm-objcopy \
             STRIP=llvm-strip \
             -j$(nproc --all)
           
+      - name: "🔧 Inject KPM Host (KernelPatch)"
+        if: matrix.variant == 'ksu'
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          echo "📦 Downloading KernelPatch patch tool..."
+          # Download the latest patch_linux tool from SukiSU_KernelPatch_patch releases
+          PATCH_URL=$(curl -sL "https://api.github.com/repos/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/latest" | grep "browser_download_url.*patch_linux" | cut -d '"' -f 4)
+          if [ -z "$PATCH_URL" ]; then
+            echo "❌ Could not find patch_linux download URL."
+            exit 1
+          fi
+          echo "URL: $PATCH_URL"
+          wget -O patch_linux "$PATCH_URL"
+          chmod +x patch_linux
+          
+          echo "🔧 Patching Image with KernelPatch host..."
+          # The kernel image is typically at out/dist/Image or common/out/arch/arm64/boot/Image
+          # We need to find the correct Image path based on the build method
+          if [ "${{ github.event.inputs.buildToolchains }}" = "android-tools" ]; then
+            IMAGE_PATH="out/dist/Image"
+          else
+            IMAGE_PATH="${{ env.kernelDir }}/${{ env.kernelName }}/out/arch/arm64/boot/Image"
+          fi
+          
+          if [ -f "$IMAGE_PATH" ]; then
+            ./patch_linux "$IMAGE_PATH"
+            if [ -f "oImage" ]; then
+              mv oImage "$IMAGE_PATH"
+              echo "✅ KPM Host injected successfully."
+            else
+              echo "⚠️ patch_linux did not create oImage. Skipping injection."
+            fi
+          else
+            echo "❌ Kernel Image not found at $IMAGE_PATH. Cannot inject KPM host."
+            exit 1
+          fi
+
       - name: 📦 Prepare artifact
         working-directory: ${{ env.WORK_DIR }}
         run: |
