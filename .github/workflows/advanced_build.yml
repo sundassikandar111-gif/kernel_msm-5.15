@@ -133,11 +133,9 @@ jobs:
           echo '# CONFIG_CFI_PERMISSIVE is not set' >> "$CONFIG_FILE"
 
           # Cleanly export __ubsan_handle_cfi_check_fail_abort for vendor modules (smem.ko) via a dedicated object
-          cat << 'EOF' > kernel/cfi_export.c
-#include <linux/export.h>
-extern void __ubsan_handle_cfi_check_fail_abort(void *data, unsigned long fn, unsigned long vt);
-EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort);
-EOF
+          echo '#include <linux/export.h>' > kernel/cfi_export.c
+          echo 'extern void __ubsan_handle_cfi_check_fail_abort(void *data, unsigned long fn, unsigned long vt);' >> kernel/cfi_export.c
+          echo 'EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort);' >> kernel/cfi_export.c
           echo "obj-y += cfi_export.o" >> kernel/Makefile
 
           echo 'CONFIG_KALLSYMS=y' >> "$CONFIG_FILE"
@@ -217,7 +215,6 @@ EOF
           fi
 
           echo "=== Running kptools patch ==="
-          # In kptools CLI: -k specifies the kpimg binary!
           ./kptools -p \
             -i "$IMAGE_FILE" \
             -o out/dist/Image_patched \
