@@ -128,8 +128,16 @@ jobs:
           echo '# CONFIG_LTO_NONE is not set' >> "$CONFIG_FILE"
           echo 'CONFIG_THINLTO=y' >> "$CONFIG_FILE"
 
+          # CFI enabled (Standard mode, NOT permissive — vendor modules like smem.ko require __ubsan_handle_cfi_check_fail_abort)
           echo 'CONFIG_CFI_CLANG=y' >> "$CONFIG_FILE"
-          echo 'CONFIG_CFI_PERMISSIVE=y' >> "$CONFIG_FILE"
+          echo '# CONFIG_CFI_PERMISSIVE is not set' >> "$CONFIG_FILE"
+
+          # Ensure CFI fail handler is exported for vendor modules (smem.ko, qcom_hwspinlock.ko)
+          if [ -f "kernel/cfi.c" ]; then
+            if ! grep -q "EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort)" kernel/cfi.c; then
+              echo 'EXPORT_SYMBOL(__ubsan_handle_cfi_check_fail_abort);' >> kernel/cfi.c
+            fi
+          fi
 
           echo 'CONFIG_KALLSYMS=y' >> "$CONFIG_FILE"
           echo 'CONFIG_KALLSYMS_ALL=y' >> "$CONFIG_FILE"
